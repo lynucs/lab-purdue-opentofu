@@ -1,0 +1,30 @@
+# Répertoires locaux et plugins OpenTofu / Terraform
+.terraform/
+.tofu/
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+
+# Fichiers de crash et logs
+crash.log
+crash.*.log
+*.log
+
+# Fichiers de variables sensibles ou overrides
+*.tfvars
+*.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Clés privées (ne jamais commit de clé privée)
+id_rsa
+id_ed25519
+*.pem
+*.key
+
+# Fichiers temporaires ou sauvegardes
+*.bak
+*~
+bak/
