@@ -6,8 +6,56 @@ resource "libvirt_network" "net_it" {
   addresses = ["192.168.10.0/24"]
   autostart = true
 
-  dns {
-    enabled = true
+dns {
+    enabled    = true
+    local_only = false
+
+    # Forwarders DNS amont (Cloudflare, Google, ou DNS de votre box/FAI)
+    forwarders {
+      address = "1.1.1.1"
+    }
+
+    forwarders {
+      address = "8.8.8.8"
+    }
+
+# --- Zone IT (it.local) ---
+    hosts {
+      ip       = "192.168.10.10"
+      hostname = "vm-it.it.local"
+    }
+
+    hosts {
+      ip       = "192.168.10.254"
+      hostname = "fw1.it.local"
+    }
+
+    # --- Zone iDMZ (idmz.local) ---
+    hosts {
+      ip       = "192.168.20.10"
+      hostname = "vm-idmz.idmz.local"
+    }
+
+    hosts {
+      ip       = "192.168.20.253"
+      hostname = "fw1.idmz.local"
+    }
+
+    hosts {
+      ip       = "192.168.20.254"
+      hostname = "fw2.idmz.local"
+    }
+
+    # --- Zone OT (ot.local) ---
+    hosts {
+      ip       = "192.168.30.10"
+      hostname = "vm-ot.ot.local"
+    }
+
+    hosts {
+      ip       = "192.168.30.253"
+      hostname = "fw2.ot.local"
+    }
   }
 }
 
