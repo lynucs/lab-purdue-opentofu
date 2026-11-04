@@ -46,6 +46,11 @@ dns {
       hostname = "fw2.idmz.local"
     }
 
+    hosts {
+      ip       = "192.168.10.100"
+      hostname = "ejbca.it.local"
+    }
+
     # --- Zone OT (ot.local) ---
     hosts {
       ip       = "192.168.30.10"
@@ -55,6 +60,11 @@ dns {
     hosts {
       ip       = "192.168.30.253"
       hostname = "fw2.ot.local"
+    }
+    # --- Sonde IDS (ot.local) ---
+    hosts {
+      ip       = "192.168.30.50"
+      hostname = "suricata.ot.local"
     }
   }
 }

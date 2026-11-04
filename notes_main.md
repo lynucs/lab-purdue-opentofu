@@ -33,6 +33,7 @@ ssh -i ~/.ssh/id_ed25519 alpine@192.168.10.254  # fw1
 ssh -i ~/.ssh/id_ed25519 ubuntu@192.168.20.10   # vm-idmz
 ssh -i ~/.ssh/id_ed25519 alpine@192.168.20.254  # fw2
 ssh -i ~/.ssh/id_ed25519 ubuntu@192.168.30.10   # vm-ot
+ssh -i ~/.ssh/id_ed25519 rocky@192.168.30.50   # vm-suricata
 
 # Pour sortir sur internet - command à entrer sur le host:
 ## 1. Identifier l'interface WAN
@@ -51,20 +52,36 @@ Dans cloud_init_fw2.cfg, ajouter noipv4ll dans /etc/dhcpcd.conf ou s'assurer que
 
 # Test
 ==========================
-ssh -i ~/.ssh/id_ed25519 ubuntu@192.168.10.10 "ping -c 2 192.168.20.10"
-ssh -i ~/.ssh/id_ed25519 ubuntu@192.168.10.10 "ping -c 2 192.168.30.10"
-ssh -i ~/.ssh/id_ed25519 ubuntu@192.168.20.10 "ping -c 2 192.168.30.10"
+ssh -i ~/.ssh/id_ed25519 ubuntu@192.168.10.10 # vm-it
+ssh -i ~/.ssh/id_ed25519 alpine@192.168.10.254 # fw1
+ssh -i ~/.ssh/id_ed25519 ubuntu@192.168.20.10 # vm-idmz
+ssh -i ~/.ssh/id_ed25519 alpine@192.168.20.254 # fw2
+ssh -i ~/.ssh/id_ed25519 ubuntu@192.168.30.10 # vm-ot
+ssh -i ~/.ssh/id_ed25519 rocky@192.168.30.50 # vm-suricata
+
+ssh -i ~/.ssh/id_ed25519 alpine@192.168.10.254
+ssh -i ~/.ssh/id_ed25519 alpine@192.168.10.254 "ping 8.8.8.8"
+
+ssh -i ~/.ssh/id_ed25519 ubuntu@192.168.10.10 "ping -c 2 192.168.20.10" # vm-it - ping vm-idmz
+ssh -i ~/.ssh/id_ed25519 ubuntu@192.168.10.10 "ping -c 2 192.168.30.10" # vm-it - ping vm-ot
+ssh -i ~/.ssh/id_ed25519 ubuntu@192.168.20.10 "ping -c 2 192.168.30.10" # vm-idmz - ping vm-ot
 
 ssh -i ~/.ssh/id_ed25519 ubuntu@192.168.10.10 "ping 8.8.8.8"
 ssh -i ~/.ssh/id_ed25519 alpine@192.168.10.254 "ping 8.8.8.8"
-
 ssh -i ~/.ssh/id_ed25519 alpine@192.168.10.254 "ping 8.8.8.8"
 
 # Relancer une VM
 ==========================
 ## Les machines
-tofu apply -replace="libvirt_domain.fw1"  -replace="libvirt_cloudinit_disk.fw1_cloudinit"   -replace="libvirt_volume.fw1_disk" -auto-approve
+target=wazuh
+domain=wazuh-manager
+tofu apply -replace="libvirt_domain.${domain}"  -replace="libvirt_cloudinit_disk.${target}_cloudinit"   -replace="libvirt_volume.${target}_disk" -auto-approve
+
+
+
 tofu apply -replace="libvirt_domain.fw2"  -replace="libvirt_cloudinit_disk.fw2_cloudinit"   -replace="libvirt_volume.fw2_disk" -auto-approve
+
+tofu apply -replace="libvirt_cloudinit_disk.fw1_cloudinit" -replace="libvirt_domain.fw1" -auto-approve
 
 tofu apply -replace="libvirt_cloudinit_disk.vm_it_cloudinit"   -replace="libvirt_volume.vm_it_disk"    -replace="libvirt_domain.vm_it" -auto-approve
 tofu apply -replace="libvirt_cloudinit_disk.vm_idmz_cloudinit" -replace="libvirt_volume.vm_idmz_disk"  -replace="libvirt_domain.vm_idmz" -auto-approve
@@ -92,3 +109,38 @@ git commit -m "feat: lab complet IT/IDMZ/OT avec KVM, OpenTofu, firewalls Alpine
 git branch -M main
 git remote add origin git@github.com:lynucs/lab-purdue-opentofu.git
 git push -u origin main
+
+
+tofu destroy -target=libvirt_domain.vm_suricata -target=libvirt_volume.vm_suricata_disk -target=libvirt_cloudinit_disk.vm_suricata_cloudinit -auto-approve
+tofu apply -target=libvirt_domain.vm_suricata -auto-approve
+
+tofu plan -target=libvirt_domain.wazuh_manager
+tofu apply -target=libvirt_domain.wazuh_manager -auto-approve
+
+# port mirroring
+
+laurent@laurent-MS-A2:~$ virsh domiflist suricata
+ Interface   Type      Source   Model    MAC
+------------------------------------------------------------
+ vnet3       network   ot       virtio   52:54:00:f6:5a:e2
+ vnet5       network   idmz     virtio   52:54:00:4a:a6:4a
+
+laurent@laurent-MS-A2:~$ virsh net-info idmz
+Name:           idmz
+UUID:           dbeb37be-3d49-4399-a915-be9488e70f2c
+Active:         yes
+Persistent:     yes
+Autostart:      yes
+Bridge:         virbr2
+
+Exécutez sur votre machine hôte (laurent-MS-A2) les commandes en ciblant vnet5 :
+
+# 1. Forcer le flooding sur le bridge iDMZ
+sudo ip link set dev virbr2 type bridge ageing_time 0
+
+# 2. Configurer la nouvelle interface hôte de Suricata (vnet5)
+sudo ip link set dev vnet5 promisc on
+sudo bridge link set dev vnet5 flood on
+
+Contrôlez ensuite dans la VM suricata :
+sudo tcpdump -nni eth1 -c 5
