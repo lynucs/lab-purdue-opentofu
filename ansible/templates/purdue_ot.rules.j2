@@ -1,0 +1,13 @@
+# ==============================================================================
+# JEU DE REGLES SURICATA - CONFORMITE PURDUE MODEL / IEC 62443
+# Genere automatiquement par Ansible
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. VIOLATION DE CLOISONNEMENT L4/L5 DIRECT VERS OT (BYPASS IDMZ - NIVEAU 3.5)
+# ------------------------------------------------------------------------------
+# Tout flux direct de la zone IT vers la zone OT sans rebond applicatif iDMZ
+alert ip {{ purdue_net_it }} any -> {{ purdue_net_ot }} any (msg:"PURDUE L4->L3 VIOLATION - Acces direct IT vers OT detecte (Bypass iDMZ)"; classtype:policy-violation; priority:1; sid:9910001; rev:1;)
+
+# Flux sortant direct initie depuis le reseau OT vers l'IT ou l'exterieur
+alert ip {{ purdue_net_ot }} any -> {{ purdue_net_it }} any (msg:"PURDUE L3->L4 VIOLATION - Connexion sortante directe non autorisee OT vers IT"; classtype:policy-violation; priority:1; sid:9910002; rev:1;)

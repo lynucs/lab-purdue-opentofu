@@ -1,0 +1,85 @@
+---
+- name: Configuration de l'agent Wazuh sur la sonde Suricata
+  hosts: suricata
+  become: true
+  tasks:
+    - name: Configurer l'ingestion de eve.json dans ossec.conf
+      ansible.builtin.blockinfile:
+        path: /var/ossec/etc/ossec.conf
+        insertbefore: "</ossec_config>"
+        marker: "<!-- {mark} ANSIBLE MANAGED BLOCK : SURICATA LOGS -->"
+        block: |
+          <localfile>
+            <log_format>json</log_format>
+            <location>/var/log/suricata/eve.json</location>
+          </localfile>
+      notify: Restart Wazuh Agent
+
+  handlers:
+    - name: Restart Wazuh Agent
+      ansible.builtin.systemd:
+        name: wazuh-agent
+        state: restarted
+
+- name: Configuration des regles de correlation sur le Wazuh Manager
+  hosts: wazuh_managers
+  become: true
+  vars:
+    container_name: "single-node-wazuh.manager-1"
+
+  tasks:
+    - name: Generer le fichier de regles XML en local sur l'hote Manager
+      ansible.builtin.copy:
+        dest: /tmp/purdue_ot_rules.xml
+        mode: '0644'
+        content: |
+          <!-- Regles de correlation personnalisees Purdue OT et Emerging Threats -->
+          <group name="suricata,ids,">
+
+            <!-- Regle 100050 : Violation de segmentation Purdue IT -> OT -->
+            <rule id="100050" level="12">
+              <if_sid>86600</if_sid>
+              <field name="alert.signature_id">^9910001$</field>
+              <description>PURDUE VIOLATION : Flux direct non autorise IT vers OT detecte (Bypass iDMZ) [$(data.src_ip) -> $(data.dest_ip)]</description>
+              <mitre>
+                <id>T1021</id>
+              </mitre>
+            </rule>
+
+            <!-- Regle 100051 : Violation de segmentation Purdue OT -> IT -->
+            <rule id="100051" level="12">
+              <if_sid>86600</if_sid>
+              <field name="alert.signature_id">^9910002$</field>
+              <description>PURDUE VIOLATION : Flux sortant non autorise OT vers IT detecte [$(data.src_ip) -> $(data.dest_ip)]</description>
+              <mitre>
+                <id>T1021</id>
+              </mitre>
+            </rule>
+
+            <!-- Regle 100052 : Correlation specifique Emerging Threats (ET Open) -->
+            <rule id="100052" level="8">
+              <if_sid>86600</if_sid>
+              <match>ET </match>
+              <description>SURICATA IDS : Alerte Emerging Threats Open declenchee [$(data.alert.signature)]</description>
+            </rule>
+
+          </group>
+      register: generated_rules
+
+    - name: Copier le fichier de regles dans le conteneur Wazuh Manager
+      ansible.builtin.command:
+        cmd: "docker cp /tmp/purdue_ot_rules.xml {{ container_name }}:/var/ossec/etc/rules/purdue_ot_rules.xml"
+      when: generated_rules.changed
+      notify:
+        - Valider et recharger Wazuh Manager
+
+    - name: Supprimer le fichier temporaire sur l'hote
+      ansible.builtin.file:
+        path: /tmp/purdue_ot_rules.xml
+        state: absent
+
+  handlers:
+    - name: Valider et recharger Wazuh Manager
+      ansible.builtin.shell: |
+        docker exec {{ container_name }} /var/ossec/bin/wazuh-analysisd -t && \
+        docker exec {{ container_name }} /var/ossec/bin/wazuh-control reload

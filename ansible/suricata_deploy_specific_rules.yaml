@@ -1,0 +1,55 @@
+---
+- name: Deployer les regles Suricata conformes au modele Purdue
+  hosts: suricata
+  become: true
+  vars:
+    purdue_net_it: "192.168.10.0/24"
+    purdue_net_idmz: "192.168.20.0/24"
+    purdue_net_ot: "192.168.30.0/24"
+    suricata_rules_dir: "/var/lib/suricata/rules"
+    suricata_config_file: "/etc/suricata/suricata.yaml"
+
+  tasks:
+    - name: S'assurer que le repertoire des regles existe
+      ansible.builtin.file:
+        path: "{{ suricata_rules_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Generer et deployer le fichier de regles purdue_ot.rules
+      ansible.builtin.template:
+        src: templates/purdue_ot.rules.j2
+        dest: "{{ suricata_rules_dir }}/purdue_ot.rules"
+        owner: root
+        group: root
+        mode: '0644'
+      register: purdue_rules_file
+
+    - name: S'assurer que purdue_ot.rules est reference dans rule-files de suricata.yaml
+      ansible.builtin.lineinfile:
+        path: "{{ suricata_config_file }}"
+        insertafter: '^rule-files:'
+        line: '  - purdue_ot.rules'
+        state: present
+      register: suricata_yaml_update
+
+    - name: Valider la syntaxe Suricata avec les nouvelles regles
+      ansible.builtin.command: "suricata -T -c {{ suricata_config_file }}"
+      changed_when: false
+
+    - name: Recharger les regles a chaud via suricatasc
+      ansible.builtin.command: suricatasc -c reload-rules
+      register: reload_res
+      changed_when: reload_res.rc == 0
+      failed_when: false
+      when: purdue_rules_file.changed or suricata_yaml_update.changed
+
+    - name: Redemarrer le service Suricata si le reload socket echoue
+      ansible.builtin.systemd:
+        name: suricata
+        state: restarted
+      when:
+        - (purdue_rules_file.changed or suricata_yaml_update.changed)
+        - reload_res is defined and reload_res.rc != 0

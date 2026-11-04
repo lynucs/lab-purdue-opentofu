@@ -1,0 +1,44 @@
+---
+- name: Installer et enrôler l'agent Wazuh sur la sonde Suricata
+  hosts: suricata
+  become: true
+  vars:
+    wazuh_manager_ip: "192.168.30.100"
+    wazuh_agent_name: "suricata-ids-ot"
+    wazuh_agent_group: "default,ot-network"
+
+  tasks:
+    - name: Importer la clé GPG officielle Wazuh
+      ansible.builtin.rpm_key:
+        key: https://packages.wazuh.com/key/GPG-KEY-WAZUH
+        state: present
+
+    - name: Ajouter le dépôt RPM officiel Wazuh v4.x
+      ansible.builtin.yum_repository:
+        name: wazuh
+        description: Dépôt officiel Wazuh
+        baseurl: https://packages.wazuh.com/4.x/yum/
+        gpgcheck: true
+        gpgkey: https://packages.wazuh.com/key/GPG-KEY-WAZUH
+        enabled: true
+
+    - name: Installer le paquet wazuh-agent avec variables d'enrôlement
+      ansible.builtin.dnf:
+        name: "wazuh-agent-4.9.0"
+        state: present
+      environment:
+        WAZUH_MANAGER: "{{ wazuh_manager_ip }}"
+        WAZUH_AGENT_NAME: "{{ wazuh_agent_name }}"
+        WAZUH_AGENT_GROUP: "{{ wazuh_agent_group }}"
+
+    - name: Vérifier et configurer l'adresse du Manager dans ossec.conf
+      ansible.builtin.replace:
+        path: /var/ossec/etc/ossec.conf
+        regexp: '<address>.*</address>'
+        replace: '<address>{{ wazuh_manager_ip }}</address>'
+
+    - name: Activer et démarrer le service wazuh-agent
+      ansible.builtin.systemd:
+        name: wazuh-agent
+        state: restarted
+        enabled: true

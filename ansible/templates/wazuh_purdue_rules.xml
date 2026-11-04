@@ -1,0 +1,19 @@
+<group name="suricata,purdue_violation,">
+  <rule id="100050" level="12">
+    <if_sid>86600</if_sid>
+    <field name="alert.signature_id">^9910001$</field>
+    <description>PURDUE VIOLATION : Flux direct non autorise IT vers OT detecte [$(data.src_ip) -> $(data.dest_ip)]</description>
+    <mitre>
+      <id>T1021</id>
+    </mitre>
+  </rule>
+
+  <rule id="100051" level="12">
+    <if_sid>86600</if_sid>
+    <field name="alert.signature_id">^9910002$</field>
+    <description>PURDUE VIOLATION : Flux direct non autorise OT vers IT detecte [$(data.src_ip) -> $(data.dest_ip)]</description>
+    <mitre>
+      <id>T1021</id>
+    </mitre>
+  </rule>
+</group>

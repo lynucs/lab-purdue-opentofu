@@ -1,0 +1,18 @@
+---
+- name: Configuration de Squid (proxy du lab)
+  hosts: squid01
+  become: true
+
+  tasks:
+    - name: Copier la liste blanche depuis l'hôte
+      copy:
+        src: files/squid/whitelist.txt
+        dest: /etc/squid/whitelist.txt
+        mode: "0644"
+      notify: Restart squid
+
+  handlers:
+    - name: Restart squid
+      service:
+        name: squid
+        state: restarted

@@ -1,0 +1,101 @@
+---
+- name: Installer et deployer Wazuh en conteneurs Docker sur wazuh-manager
+  hosts: wazuh-manager
+  become: true
+  vars:
+    wazuh_docker_version: "v4.9.0"
+    wazuh_docker_dir: "/opt/wazuh-docker"
+    compose_project_dir: "/opt/wazuh-docker/single-node"
+
+  tasks:
+    - name: Configurer le parametre noyau vm.max_map_count (requis pour Wazuh Indexer)
+      ansible.posix.sysctl:
+        name: vm.max_map_count
+        value: "262144"
+        state: present
+        reload: true
+
+    - name: Reduire le swappiness pour optimiser les performances memoire
+      ansible.posix.sysctl:
+        name: vm.swappiness
+        value: "1"
+        state: present
+        reload: true
+
+    - name: Ajouter le depot officiel Docker CE pour Rocky Linux / RHEL 9
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/centos/docker-ce.repo
+        dest: /etc/yum.repos.d/docker-ce.repo
+        mode: '0644'
+
+    - name: Installer Docker Engine, le plugin Docker Compose et Git
+      ansible.builtin.dnf:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-compose-plugin
+          - git
+          - firewalld
+        state: present
+
+    - name: S'assurer que le service Docker est demarre et active au boot
+      ansible.builtin.systemd:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: S'assurer que le service firewalld est actif
+      ansible.builtin.systemd:
+        name: firewalld
+        state: started
+        enabled: true
+
+    - name: Ouvrir les ports reseau pour les agents, l'API et la console Dashboard
+      ansible.posix.firewalld:
+        port: "{{ item }}"
+        permanent: true
+        state: enabled
+        immediate: true
+      loop:
+        - "1514/tcp" # Communication chiffree agents <-> manager
+        - "1515/tcp" # Enrolement automatique des agents
+        - "443/tcp"  # Console web Wazuh Dashboard
+        - "9200/tcp" # API REST Wazuh Indexer
+
+    - name: Cloner le depot officiel wazuh-docker
+      ansible.builtin.git:
+        repo: https://github.com/wazuh/wazuh-docker.git
+        dest: "{{ wazuh_docker_dir }}"
+        version: "{{ wazuh_docker_version }}"
+        depth: 1
+        force: false
+
+    - name: Generer les certificats TLS mutuels du cluster Wazuh
+      ansible.builtin.command:
+        cmd: docker compose -f generate-indexer-certs.yml run --rm generator
+        chdir: "{{ compose_project_dir }}"
+        creates: "{{ compose_project_dir }}/config/wazuh_indexer_ssl_certs/root-ca.pem"
+
+    - name: Lancer le stack Wazuh Docker en arriere-plan
+      ansible.builtin.command:
+        cmd: docker compose up -d
+        chdir: "{{ compose_project_dir }}"
+      register: compose_up
+      changed_when: "'Creating' in compose_up.stdout or 'Starting' in compose_up.stdout"
+
+    - name: Attendre 30 secondes pour l'initialisation des conteneurs
+      ansible.builtin.pause:
+        seconds: 30
+      when: compose_up.changed
+
+    - name: Verifier l'etat d'execution des conteneurs Wazuh
+      ansible.builtin.command:
+        cmd: docker compose ps --format json
+        chdir: "{{ compose_project_dir }}"
+      register: containers_status
+      changed_when: false
+
+    - name: Afficher le statut des conteneurs
+      ansible.builtin.debug:
+        msg: "Stack Wazuh Docker demarre avec succes sur {{ inventory_hostname }}."

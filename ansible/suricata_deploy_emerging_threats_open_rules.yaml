@@ -1,0 +1,67 @@
+---
+- name: Installer et configurer les regles Emerging Threats Open pour Suricata
+  hosts: suricata
+  become: true
+  tasks:
+    - name: Verifier la presence de l'outil suricata-update
+      ansible.builtin.stat:
+        path: /usr/bin/suricata-update
+      register: suricata_update_bin
+
+    - name: S'assurer que le paquet suricata est installe (si suricata-update est manquant)
+      ansible.builtin.dnf:
+        name: suricata
+        state: present
+      when: not suricata_update_bin.stat.exists
+
+    - name: Mettre a jour l'index des sources de regles Suricata
+      ansible.builtin.command: suricata-update update-sources
+      changed_when: false
+
+    - name: Activer la source de regles Emerging Threats Open (et/open)
+      ansible.builtin.command: suricata-update enable-source et/open
+      register: enable_source_output
+      changed_when: "'Source et/open already enabled' not in enable_source_output.stdout"
+
+    - name: Telecharger et compiler le jeu de regles avec suricata-update
+      ansible.builtin.command: suricata-update
+      register: rules_update
+      changed_when: "'Writing rules to' in rules_update.stdout"
+
+    - name: S'assurer de la presence du chemin par defaut des regles dans suricata.yaml
+      ansible.builtin.lineinfile:
+        path: /etc/suricata/suricata.yaml
+        regexp: '^default-rule-path:'
+        line: 'default-rule-path: /var/lib/suricata/rules'
+        state: present
+
+    - name: S'assurer que suricata.rules est bien reference dans rule-files
+      ansible.builtin.lineinfile:
+        path: /etc/suricata/suricata.yaml
+        insertafter: '^rule-files:'
+        line: '  - suricata.rules'
+        state: present
+
+    - name: Valider la syntaxe globale de Suricata avec les nouvelles regles
+      ansible.builtin.command: suricata -T -c /etc/suricata/suricata.yaml
+      changed_when: false
+
+    - name: Recharger les regles a chaud via suricatasc
+      ansible.builtin.command: suricatasc -c reload-rules
+      register: reload_res
+      changed_when: reload_res.rc == 0
+      failed_when: false
+
+    - name: Redemarrer le service Suricata si le rechargement socket echoue
+      ansible.builtin.systemd:
+        name: suricata
+        state: restarted
+      when: reload_res.rc != 0
+
+    - name: Planifier la mise a jour automatique quotidienne des regles ET Open
+      ansible.builtin.cron:
+        name: "Mise a jour quotidienne des regles ET Open"
+        hour: "3"
+        minute: "30"
+        job: "/usr/bin/suricata-update --reload-rules > /dev/null 2>&1"
+        state: present

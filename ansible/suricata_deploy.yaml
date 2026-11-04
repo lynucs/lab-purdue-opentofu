@@ -1,0 +1,113 @@
+---
+- name: Suricata + Wazuh agent sur ids0
+  hosts: suricata
+  become: true
+  gather_facts: false
+
+  vars:
+    capture_interface: eth1
+    home_net: "[192.168.10.0/24, 192.168.20.0/24, 192.168.30.0/24]"
+
+  tasks:
+    - name: Activer le depot CRB (CodeReady Linux Builder)
+      ansible.builtin.command: dnf config-manager --set-enabled crb
+      changed_when: false
+
+    - name: Installer le paquet epel-release
+      ansible.builtin.dnf:
+        name: epel-release
+        state: present
+
+    - name: Installer les prerequis, outils et Suricata
+      ansible.builtin.dnf:
+        name:
+          - suricata
+          - ethtool
+          - tcpdump
+          - jq
+        state: present
+        update_cache: true
+
+    - name: Desactiver l'adressage IP sur l'interface de capture via NetworkManager
+      community.general.nmcli:
+        conn_name: "ids-span-{{ capture_interface }}"
+        ifname: "{{ capture_interface }}"
+        type: ethernet
+        ip4: ""
+        method4: disabled
+        method6: disabled
+        state: present
+        autoconnect: true
+      failed_when: false
+
+    - name: Deployer l'unite systemd pour la persistance du mode promiscuous et no-offload
+      ansible.builtin.template:
+        src: templates/tapif-promisc.service.j2
+        dest: /etc/systemd/system/tapif-promisc.service
+        owner: root
+        group: root
+        mode: "0644"
+      notify:
+        - Reload systemd
+        - Restart tapif-promisc
+
+    - name: Activer et demarrer le service tapif-promisc
+      ansible.builtin.systemd:
+        name: tapif-promisc
+        enabled: true
+        state: started
+
+    - name: Definir les options de demarrage de Suricata dans /etc/sysconfig/suricata
+      ansible.builtin.lineinfile:
+        path: /etc/sysconfig/suricata
+        regexp: "^OPTIONS="
+        line: 'OPTIONS="-i {{ capture_interface }} --af-packet"'
+        create: true
+      notify: Restart suricata
+
+    - name: Configurer HOME_NET dans /etc/suricata/suricata.yaml
+      ansible.builtin.lineinfile:
+        path: /etc/suricata/suricata.yaml
+        regexp: '^\s*HOME_NET:'
+        line: '    HOME_NET: "{{ home_net }}"'
+      notify: Restart suricata
+    
+    - name: Configurer l'interface af-packet par defaut dans suricata.yaml
+      ansible.builtin.replace:
+        path: /etc/suricata/suricata.yaml
+        regexp: '(?m)^(\s*-\s*interface:\s*)\S+'
+        replace: '\1{{ capture_interface }}'
+      notify: Restart suricata
+
+    - name: Mettre a jour les regles Suricata (ET Open)
+      ansible.builtin.command:
+        cmd: suricata-update
+      register: suricata_update_result
+      changed_when: "'Writing rules to' in suricata_update_result.stdout"
+      notify: Restart suricata
+
+    - name: Valider la syntaxe et la coherence de suricata.yaml
+      ansible.builtin.command:
+        cmd: suricata -T -c /etc/suricata/suricata.yaml
+      changed_when: false
+
+    - name: Activer et demarrer le service Suricata
+      ansible.builtin.systemd:
+        name: suricata
+        enabled: true
+        state: started
+        
+  handlers:
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Restart tapif-promisc
+      ansible.builtin.systemd:
+        name: tapif-promisc
+        state: restarted
+
+    - name: Restart suricata
+      ansible.builtin.systemd:
+        name: suricata
+        state: restarted

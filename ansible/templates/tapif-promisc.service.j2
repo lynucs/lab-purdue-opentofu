@@ -1,0 +1,14 @@
+[Unit]
+Description=Promiscuous mode et no-offload sur {{ capture_interface }}
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/ip link set {{ capture_interface }} up
+ExecStart=/usr/sbin/ip link set {{ capture_interface }} promisc on
+ExecStart=/usr/sbin/ethtool -K {{ capture_interface }} rx off tx off gso off gro off lro off
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

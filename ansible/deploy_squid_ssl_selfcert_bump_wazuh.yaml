@@ -1,0 +1,268 @@
+---
+- name: Installation Squid SSL-Bump (auto-signé)
+  hosts: RPOPR-CP-P1-01
+  become: true
+  gather_facts: false
+
+  vars:
+    squid_port: 3128
+    squid_ssl_dir: /etc/squid/ssl
+    squid_ssl_db_path: /var/spool/squid/ssl_db
+    squid_ssl_db_size_mb: 20
+    squid_dynamic_cert_mem_cache_size: 16MB
+    squid_cache_size_mb: 100
+    squid_allowed_nets:
+      - 192.168.200.0/24
+      - 192.168.122.0/24
+    wazuh_user: wazuh
+    wazuh_ossec_conf: /var/ossec/etc/ossec.conf
+
+  tasks:
+    - name: Variables selon l'OS
+      ansible.builtin.set_fact:
+        squid_user: squid
+        squid_group: squid
+        squid_packages:
+          - 'squid'
+          - 'openssl'
+          - 'ca-certificates'
+          - 'acl'
+        squid_security_file_certgen_bin: "/usr/lib64/squid/security_file_certgen"
+
+    - name: Installer Squid
+      ansible.builtin.package:
+        name: "{{ squid_packages }}"
+        state: present
+
+    - name: Vérifier que Squid a SSL-Bump
+      ansible.builtin.command: squid -v
+      register: squid_ver
+      changed_when: false
+
+    - name: Échec si pas de SSL-Bump
+      ansible.builtin.assert:
+        that:
+          - "'--with-openssl' in squid_ver.stdout or '--enable-ssl-crtd' in squid_ver.stdout or 'with-openssl' in squid_ver.stdout"
+        fail_msg: "Ce paquet squid n'a pas SSL-Bump / OpenSSL."
+
+    - name: Répertoire certificats
+      ansible.builtin.file:
+        path: "{{ squid_ssl_dir }}"
+        state: directory
+        owner: "{{ squid_user }}"
+        group: "{{ squid_group }}"
+        mode: "0700"
+
+    - name: Whitelist
+      ansible.builtin.copy:
+        src: "{{ inventory_dir }}/files/squid/whitelist.txt"
+        dest: /etc/squid/whitelist.txt
+        owner: "{{ squid_user }}"
+        group: "{{ squid_group }}"
+        mode: "0644"
+      notify: Reload squid
+
+    - name: Clé CA
+      ansible.builtin.command: openssl genrsa -out {{ squid_ssl_dir }}/squid_ca.key 4096
+      args:
+        creates: "{{ squid_ssl_dir }}/squid_ca.key"
+
+    - name: Certificat CA
+      ansible.builtin.command: >
+        openssl req -new -x509 -days 1825
+        -key {{ squid_ssl_dir }}/squid_ca.key
+        -out {{ squid_ssl_dir }}/squid_ca.crt
+        -subj "/C=FR/O=mylab/CN=Squid SelfSigned Root CA"
+        -addext "basicConstraints=critical,CA:TRUE,pathlen:0"
+        -addext "keyUsage=critical,digitalSignature,keyCertSign,cRLSign"
+      args:
+        creates: "{{ squid_ssl_dir }}/squid_ca.crt"
+
+    - name: Bundle PEM
+      ansible.builtin.shell: >
+        cat {{ squid_ssl_dir }}/squid_ca.key
+        {{ squid_ssl_dir }}/squid_ca.crt
+        > {{ squid_ssl_dir }}/squid_bump.pem
+      args:
+        creates: "{{ squid_ssl_dir }}/squid_bump.pem"
+
+    - name: Droits certs
+      ansible.builtin.file:
+        path: "{{ item }}"
+        owner: "{{ squid_user }}"
+        group: "{{ squid_group }}"
+        mode: "0400"
+      loop:
+        - "{{ squid_ssl_dir }}/squid_ca.key"
+        - "{{ squid_ssl_dir }}/squid_ca.crt"
+        - "{{ squid_ssl_dir }}/squid_bump.pem"
+
+# Utile uniquement pour l'avoir sous la main pour diffusion sur postes client
+#    - name: Récupérer la CA pour Windows
+#      ansible.builtin.fetch:
+#        src: "{{ squid_ssl_dir }}/squid_ca.crt"
+#        dest: "{{ inventory_dir }}/files/squid_ca.crt"
+#        flat: true
+
+    - name: Parent ssl_db
+      ansible.builtin.file:
+        path: "{{ squid_ssl_db_path | dirname }}"
+        state: directory
+        owner: "{{ squid_user }}"
+        group: "{{ squid_group }}"
+        mode: "0750"
+
+    - name: ssl_db initialisée ?
+      ansible.builtin.stat:
+        path: "{{ squid_ssl_db_path }}/index.txt"
+      register: ssl_db_idx
+
+    - name: Suppression du dossier orphelin de la ssl_db
+      ansible.builtin.file:
+        path: "{{ squid_ssl_db_path }}"
+        state: absent
+      when: not ssl_db_idx.stat.exists
+
+    - name: Init ssl_db
+      ansible.builtin.command: >
+        {{ squid_security_file_certgen_bin }} -c -s {{ squid_ssl_db_path }} -M {{ squid_ssl_db_size_mb }}MB
+      become: true
+      become_user: "{{ squid_user }}"
+      when: not ssl_db_idx.stat.exists
+
+    - name: Perms ssl_db
+      ansible.builtin.file:
+        path: "{{ squid_ssl_db_path }}"
+        state: directory
+        owner: "{{ squid_user }}"
+        group: "{{ squid_group }}"
+        recurse: true
+
+    - name: squid.conf
+      ansible.builtin.template:
+        src: "{{ inventory_dir }}/templates/squid.conf.j2"
+        dest: /etc/squid/squid.conf
+        owner: "{{ squid_user }}"
+        group: "{{ squid_group }}"
+        mode: "0644"
+        validate: squid -k parse -f %s
+      notify: Restart squid
+
+    - name: Cache déjà init ?
+      ansible.builtin.stat:
+        path: /var/spool/squid/00
+      register: squid_cache_dir
+
+    - name: Stop Squid avant squid -z
+      ansible.builtin.service:
+        name: squid
+        state: stopped
+      when: not squid_cache_dir.stat.exists
+
+    - name: Init cache
+      ansible.builtin.command: squid -z
+      when: not squid_cache_dir.stat.exists
+
+#    - name: Firewall-cmd présent ?
+#      ansible.builtin.command: which firewall-cmd
+#      register: fwcmd
+#      changed_when: false
+#      failed_when: false
+#      when: ansible_os_family == "RedHat"
+
+    - name: Firewall enable service
+      ansible.builtin.command: firewall-cmd --permanent --add-service=squid --zone=public
+
+    - name: Recharger firewalld
+      ansible.builtin.command: firewall-cmd --reload
+
+#    - name: SELinux squid_connect_any
+#      ansible.posix.seboolean:
+#        name: squid_connect_any
+#        state: true
+#        persistent: true
+#      when: ansible_os_family == "RedHat"
+#      failed_when: false
+
+    - name: Débloquer systemd
+      ansible.builtin.command: systemctl reset-failed squid
+      changed_when: false
+
+    - name: Squid started
+      ansible.builtin.service:
+        name: squid
+        state: started
+        enabled: true
+
+# Normalement la gestion de l'erreur est faite avec le RC de firewall-cmd.
+#    - name: Attendre le port
+#      ansible.builtin.wait_for:
+#        port: "{{ squid_port }}"
+#        timeout: 20
+
+#    - name: Wazuh agent présent ?
+#      ansible.builtin.stat:
+#        path: "{{ wazuh_ossec_conf }}"
+#      register: wazuh_conf
+#
+#    - name: Wazuh dans le groupe squid
+#      ansible.builtin.user:
+#        name: "{{ wazuh_user }}"
+#        groups: "{{ squid_group }}"
+#        append: true
+#      when: wazuh_conf.stat.exists
+#      notify: Restart wazuh-agent
+#
+#    - name: ACL logs Squid pour Wazuh
+#      ansible.posix.acl:
+#        path: /var/log/squid
+#        entity: "{{ wazuh_user }}"
+#        etype: user
+#        permissions: rx
+#        state: present
+#      when: wazuh_conf.stat.exists
+#
+#    - name: Collecte logs Squid
+#      ansible.builtin.blockinfile:
+#        path: "{{ wazuh_ossec_conf }}"
+#        marker: "<!-- {mark} ANSIBLE MANAGED BLOCK : SQUID LOGS -->"
+#        insertbefore: "</ossec_config>"
+#        block: |
+#          <localfile>
+#            <log_format>squid</log_format>
+#            <location>/var/log/squid/access.log</location>
+#          </localfile>
+#          <localfile>
+#            <log_format>syslog</log_format>
+#            <location>/var/log/squid/cache.log</location>
+#          </localfile>
+#      when: wazuh_conf.stat.exists
+#      notify: Restart wazuh-agent
+#
+#    - name: FIM Squid
+#      ansible.builtin.blockinfile:
+#        path: "{{ wazuh_ossec_conf }}"
+#        marker: "<!-- {mark} ANSIBLE MANAGED BLOCK : SQUID FIM -->"
+#        insertbefore: "</ossec_config>"
+#        block: |
+#          <syscheck>
+#            <directories check_all="yes" realtime="yes">/etc/squid/squid.conf</directories>
+#            <directories check_all="yes" realtime="yes">/etc/squid/whitelist.txt</directories>
+#            <directories check_all="yes" realtime="yes">{{ squid_ssl_dir }}</directories>
+#          </syscheck>
+#      when: wazuh_conf.stat.exists
+#      notify: Restart wazuh-agent
+
+  handlers:
+    - name: Reload squid
+      ansible.builtin.command: squid -k reconfigure
+
+    - name: Restart squid
+      ansible.builtin.service:
+        name: squid
+        state: restarted
+
+#    - name: Restart wazuh-agent
+#      ansible.builtin.service:
+#        name: wazuh-agent
+#        state: restarted
