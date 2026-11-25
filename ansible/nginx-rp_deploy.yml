@@ -1,0 +1,235 @@
+---
+- name: Nginx reverse proxy + ModSecurity
+  hosts: squid
+  become: true
+  gather_facts: true
+
+  vars:
+    waf_listen_ip: "192.168.20.20"
+    nginx_http_port: 8080
+    nginx_https_port: 8443
+    protected_backends:
+      - name: vm-ot
+        url: "http://192.168.30.10/"
+    wazuh_ossec_conf: /var/ossec/etc/ossec.conf
+    modsec_audit_log: /var/log/nginx/modsec_audit.log
+    crs_version: v4.14.0
+    nginx_user: "{{ 'nginx' }}"
+    nginx_packages:
+      - nginx
+      - nginx-mod-modsecurity
+      - acl
+
+  tasks:
+    - name: Cache DNF
+      ansible.builtin.dnf:
+        update_cache: true
+
+    - name: CRB + EPEL
+      ansible.builtin.dnf:
+        name:
+          - epel-release
+          - dnf-plugins-core
+        state: present
+
+    - name: Enable CRB
+      ansible.builtin.command: dnf config-manager --set-enabled crb
+      changed_when: false
+
+    - name: Paquets Nginx + ModSecurity
+      ansible.builtin.dnf:
+        name: "{{ nginx_packages }}"
+        state: present
+        update_cache: true
+
+    - name: Git (clone CRS)
+      ansible.builtin.dnf:
+        name: git
+        state: present
+
+    - name: /etc/nginx/modsec
+      ansible.builtin.file:
+        path: /etc/nginx/modsec
+        state: directory
+        mode: "0755"
+
+    - name: modsecurity.conf
+      ansible.builtin.get_url:
+        url: https://raw.githubusercontent.com/owasp-modsecurity/ModSecurity/v3/master/modsecurity.conf-recommended
+        dest: /etc/nginx/modsec/modsecurity.conf
+        mode: "0644"
+        force: false
+
+    - name: unicode.mapping
+      ansible.builtin.get_url:
+        url: https://raw.githubusercontent.com/owasp-modsecurity/ModSecurity/v3/master/unicode.mapping
+        dest: /etc/nginx/modsec/unicode.mapping
+        mode: "0644"
+        force: false
+
+    - name: Options ModSecurity
+      ansible.builtin.lineinfile:
+        path: /etc/nginx/modsec/modsecurity.conf
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+      loop:
+        - { regexp: '^#?SecRuleEngine', line: 'SecRuleEngine On' }
+        - { regexp: '^#?SecAuditEngine', line: 'SecAuditEngine RelevantOnly' }
+        - { regexp: '^#?SecAuditLogRelevantStatus', line: 'SecAuditLogRelevantStatus "^(?:5|4(?!04))"' }
+        - { regexp: '^#?SecAuditLogFormat', line: 'SecAuditLogFormat JSON' }
+        - { regexp: '^#?SecAuditLogType', line: 'SecAuditLogType Serial' }
+        - { regexp: '^#?SecAuditLog\s+', line: 'SecAuditLog {{ modsec_audit_log }}' }
+      notify: Reload nginx
+
+    - name: OWASP CRS
+      ansible.builtin.git:
+        repo: https://github.com/coreruleset/coreruleset.git
+        dest: /etc/nginx/modsec/owasp-crs
+        version: "{{ crs_version }}"
+        force: false
+
+    - name: crs-setup.conf
+      ansible.builtin.copy:
+        src: /etc/nginx/modsec/owasp-crs/crs-setup.conf.example
+        dest: /etc/nginx/modsec/owasp-crs/crs-setup.conf
+        remote_src: true
+        force: false
+
+    - name: main.conf
+      ansible.builtin.copy:
+        dest: /etc/nginx/modsec/main.conf
+        mode: "0644"
+        content: |
+          Include /etc/nginx/modsec/modsecurity.conf
+          Include /etc/nginx/modsec/owasp-crs/crs-setup.conf
+          Include /etc/nginx/modsec/owasp-crs/rules/*.conf
+      notify: Reload nginx
+
+    - name: Journal audit
+      ansible.builtin.file:
+        path: "{{ modsec_audit_log }}"
+        state: touch
+        owner: "{{ nginx_user }}"
+        group: "{{ nginx_user }}"
+        mode: "0640"
+        modification_time: preserve
+        access_time: preserve
+      notify: Reload nginx
+
+    - name: Certificat serveur Nginx
+      ansible.builtin.command: >
+        openssl req -x509 -nodes -newkey rsa:2048 -days 825
+        -keyout /etc/nginx/modsec/nginx.key
+        -out /etc/nginx/modsec/nginx.crt
+        -subj "/CN=rp.idmz.local"
+      args:
+        creates: /etc/nginx/modsec/nginx.crt
+
+    - name: Droits certs
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        owner: root
+        group: "{{ nginx_user }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: /etc/nginx/modsec/nginx.key, mode: "0640" }
+        - { path: /etc/nginx/modsec/nginx.crt, mode: "0644" }
+
+    - name: Retirer default.conf
+      ansible.builtin.file:
+        path: /etc/nginx/conf.d/default.conf
+        state: absent
+
+    - name: Vhost reverse proxy
+      ansible.builtin.template:
+        src: "{{ inventory_dir }}/templates/protected_reverse_proxy.conf.j2"
+        dest: /etc/nginx/conf.d/protected_reverse_proxy.conf
+        mode: "0644"
+      notify: Reload nginx
+
+    - name: nginx -t
+      ansible.builtin.command: nginx -t
+      changed_when: false
+
+    - name: Autoriser le bind sur IP statique avant montée complète du réseau
+      ansible.posix.sysctl:
+        name: net.ipv4.ip_nonlocal_bind
+        value: "1"
+        sysctl_file: /etc/sysctl.d/99-nonlocal-bind.conf
+        reload: true
+
+    - name: Appliquer les rechargements en attente avant vérification
+      ansible.builtin.meta: flush_handlers
+
+    - name: Nginx started
+      ansible.builtin.service:
+        name: nginx
+        state: started
+        enabled: true
+
+    - name: Écoute HTTP
+      ansible.builtin.wait_for:
+        host: "{{ waf_listen_ip }}"
+        port: "{{ nginx_http_port }}"
+        timeout: 20
+
+    - name: Écoute HTTPS
+      ansible.builtin.wait_for:
+        host: "{{ waf_listen_ip }}"
+        port: "{{ nginx_https_port }}"
+        timeout: 20
+
+    # -------------------------------------------------------------------------
+    # Wazuh
+    # -------------------------------------------------------------------------
+
+    - name: Wazuh agent présent ?
+      ansible.builtin.stat:
+        path: "{{ wazuh_ossec_conf }}"
+      register: wazuh_conf
+
+    - name: ACL lecture audit ModSecurity pour wazuh
+      ansible.posix.acl:
+        path: "{{ modsec_audit_log }}"
+        entity: wazuh
+        etype: user
+        permissions: r
+        state: present
+      when: wazuh_conf.stat.exists
+
+    - name: Collecte log ModSecurity JSON
+      ansible.builtin.blockinfile:
+        path: "{{ wazuh_ossec_conf }}"
+        marker: "<!-- {mark} ANSIBLE MANAGED BLOCK : MODSECURITY WAF -->"
+        insertbefore: "</ossec_config>"
+        block: |
+          <localfile>
+            <log_format>json</log_format>
+            <location>{{ modsec_audit_log }}</location>
+          </localfile>
+      when: wazuh_conf.stat.exists
+      notify: Restart wazuh-agent
+
+    - name: FIM Nginx / ModSecurity
+      ansible.builtin.blockinfile:
+        path: "{{ wazuh_ossec_conf }}"
+        marker: "<!-- {mark} ANSIBLE MANAGED BLOCK : NGINX FIM -->"
+        insertbefore: "</ossec_config>"
+        block: |
+          <syscheck>
+            <directories check_all="yes" realtime="yes">/etc/nginx/conf.d</directories>
+            <directories check_all="yes" realtime="yes">/etc/nginx/modsec</directories>
+          </syscheck>
+      when: wazuh_conf.stat.exists
+      notify: Restart wazuh-agent
+
+  handlers:
+    - name: Reload nginx
+      ansible.builtin.service:
+        name: nginx
+        state: reloaded
+
+    - name: Restart wazuh-agent
+      ansible.builtin.service:
+        name: wazuh-agent
+        state: restarted

@@ -1,7 +1,6 @@
-tofu destroy \
-  -target=libvirt_domain.squid \
-  -target=libvirt_cloudinit_disk.squid_cloudinit \
-  -target=libvirt_volume.squid_disk
+
+$ tofu destroy   -target=libvirt_domain.vm_squid   -target=libvirt_cloudinit_disk.vm_squid_cloudinit   -target=libvirt_volume.vm_squid_disk
+
 
 tofu apply \
   -replace=libvirt_domain.squid \
