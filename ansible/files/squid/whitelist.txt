@@ -1,0 +1,12 @@
+.google.com
+.msftconnecttest.com
+.docker.io
+.docker.com
+.cloudflare.com
+.gcr.io
+.k8s.io
+.github.com
+.githubusercontent.com
+.fedoraproject.org
+.rockylinux.org
+example.com

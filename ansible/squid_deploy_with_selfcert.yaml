@@ -1,6 +1,6 @@
 ---
 - name: Installation Squid SSL-Bump (auto-signé)
-  hosts: RPOPR-CP-P1-01
+  hosts: squid
   become: true
   gather_facts: false
 
@@ -12,8 +12,8 @@
     squid_dynamic_cert_mem_cache_size: 16MB
     squid_cache_size_mb: 100
     squid_allowed_nets:
-      - 192.168.200.0/24
-      - 192.168.122.0/24
+      - 192.168.20.0/24
+      - 192.168.30.0/24
     wazuh_user: wazuh
     wazuh_ossec_conf: /var/ossec/etc/ossec.conf
 
@@ -27,6 +27,7 @@
           - 'openssl'
           - 'ca-certificates'
           - 'acl'
+          # - 'python3-firewall'
         squid_security_file_certgen_bin: "/usr/lib64/squid/security_file_certgen"
 
     - name: Installer Squid
@@ -163,95 +164,41 @@
       ansible.builtin.command: squid -z
       when: not squid_cache_dir.stat.exists
 
-#    - name: Firewall-cmd présent ?
-#      ansible.builtin.command: which firewall-cmd
-#      register: fwcmd
-#      changed_when: false
-#      failed_when: false
-#      when: ansible_os_family == "RedHat"
-
-    - name: Firewall enable service
-      ansible.builtin.command: firewall-cmd --permanent --add-service=squid --zone=public
-
-    - name: Recharger firewalld
-      ansible.builtin.command: firewall-cmd --reload
-
-#    - name: SELinux squid_connect_any
-#      ansible.posix.seboolean:
-#        name: squid_connect_any
-#        state: true
-#        persistent: true
-#      when: ansible_os_family == "RedHat"
-#      failed_when: false
-
-    - name: Débloquer systemd
-      ansible.builtin.command: systemctl reset-failed squid
-      changed_when: false
-
     - name: Squid started
       ansible.builtin.service:
         name: squid
         state: started
         enabled: true
 
-# Normalement la gestion de l'erreur est faite avec le RC de firewall-cmd.
-#    - name: Attendre le port
-#      ansible.builtin.wait_for:
-#        port: "{{ squid_port }}"
-#        timeout: 20
+    # - name: Ouvrir le port Squid dans firewalld
+    #   ansible.posix.firewalld:
+    #     port: "{{ squid_port }}/tcp"
+    #     permanent: true
+    #     state: enabled
+    #     immediate: true
+    #   failed_when: false
 
-#    - name: Wazuh agent présent ?
-#      ansible.builtin.stat:
-#        path: "{{ wazuh_ossec_conf }}"
-#      register: wazuh_conf
-#
-#    - name: Wazuh dans le groupe squid
-#      ansible.builtin.user:
-#        name: "{{ wazuh_user }}"
-#        groups: "{{ squid_group }}"
-#        append: true
-#      when: wazuh_conf.stat.exists
-#      notify: Restart wazuh-agent
-#
-#    - name: ACL logs Squid pour Wazuh
-#      ansible.posix.acl:
-#        path: /var/log/squid
-#        entity: "{{ wazuh_user }}"
-#        etype: user
-#        permissions: rx
-#        state: present
-#      when: wazuh_conf.stat.exists
-#
-#    - name: Collecte logs Squid
-#      ansible.builtin.blockinfile:
-#        path: "{{ wazuh_ossec_conf }}"
-#        marker: "<!-- {mark} ANSIBLE MANAGED BLOCK : SQUID LOGS -->"
-#        insertbefore: "</ossec_config>"
-#        block: |
-#          <localfile>
-#            <log_format>squid</log_format>
-#            <location>/var/log/squid/access.log</location>
-#          </localfile>
-#          <localfile>
-#            <log_format>syslog</log_format>
-#            <location>/var/log/squid/cache.log</location>
-#          </localfile>
-#      when: wazuh_conf.stat.exists
-#      notify: Restart wazuh-agent
-#
-#    - name: FIM Squid
-#      ansible.builtin.blockinfile:
-#        path: "{{ wazuh_ossec_conf }}"
-#        marker: "<!-- {mark} ANSIBLE MANAGED BLOCK : SQUID FIM -->"
-#        insertbefore: "</ossec_config>"
-#        block: |
-#          <syscheck>
-#            <directories check_all="yes" realtime="yes">/etc/squid/squid.conf</directories>
-#            <directories check_all="yes" realtime="yes">/etc/squid/whitelist.txt</directories>
-#            <directories check_all="yes" realtime="yes">{{ squid_ssl_dir }}</directories>
-#          </syscheck>
-#      when: wazuh_conf.stat.exists
-#      notify: Restart wazuh-agent
+    - name: Donner les droits de lecture (ACL) a wazuh sur /var/log/squid
+      ansible.posix.acl:
+        path: /var/log/squid
+        entity: "{{ wazuh_user }}"
+        etype: user
+        permissions: rx
+        state: present
+      failed_when: false
+
+    - name: Configurer l'ingestion de access.log Squid dans Wazuh
+      ansible.builtin.blockinfile:
+        path: "{{ wazuh_ossec_conf }}"
+        insertbefore: "</ossec_config>"
+        marker: "<!-- {mark} ANSIBLE MANAGED BLOCK : SQUID LOGS -->"
+        block: |
+          <localfile>
+            <log_format>squid</log_format>
+            <location>/var/log/squid/access.log</location>
+          </localfile>
+      notify: Restart wazuh-agent
+      failed_when: false
 
   handlers:
     - name: Reload squid
@@ -262,7 +209,7 @@
         name: squid
         state: restarted
 
-#    - name: Restart wazuh-agent
-#      ansible.builtin.service:
-#        name: wazuh-agent
-#        state: restarted
+    - name: Restart wazuh-agent
+      ansible.builtin.service:
+        name: wazuh-agent
+        state: restarted

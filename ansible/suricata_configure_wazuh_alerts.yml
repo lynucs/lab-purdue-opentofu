@@ -82,4 +82,4 @@
     - name: Valider et recharger Wazuh Manager
       ansible.builtin.shell: |
         docker exec {{ container_name }} /var/ossec/bin/wazuh-analysisd -t && \
-        docker exec {{ container_name }} /var/ossec/bin/wazuh-control reload
+        docker exec {{ container_name }} /var/ossec/bin/wazuh-control reload  

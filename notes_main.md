@@ -101,14 +101,6 @@ Host 192.168.10.* 192.168.20.* 192.168.30.*
     UserKnownHostsFile /dev/null
     LogLevel ERROR
 
-# GIT:  https://github.com/lynucs/lab-purdue-opentofu
-==========================
-git config --global user.email "mail@laurentferon.com"
-git config --global user.name "Laurent Feron"
-git commit -m "feat: lab complet IT/IDMZ/OT avec KVM, OpenTofu, firewalls Alpine et hôtes Ubuntu"
-git branch -M main
-git remote add origin git@github.com:lynucs/lab-purdue-opentofu.git
-git push -u origin main
 
 
 tofu destroy -target=libvirt_domain.vm_suricata -target=libvirt_volume.vm_suricata_disk -target=libvirt_cloudinit_disk.vm_suricata_cloudinit -auto-approve
@@ -117,30 +109,10 @@ tofu apply -target=libvirt_domain.vm_suricata -auto-approve
 tofu plan -target=libvirt_domain.wazuh_manager
 tofu apply -target=libvirt_domain.wazuh_manager -auto-approve
 
-# port mirroring
 
-laurent@laurent-MS-A2:~$ virsh domiflist suricata
- Interface   Type      Source   Model    MAC
-------------------------------------------------------------
- vnet3       network   ot       virtio   52:54:00:f6:5a:e2
- vnet5       network   idmz     virtio   52:54:00:4a:a6:4a
 
-laurent@laurent-MS-A2:~$ virsh net-info idmz
-Name:           idmz
-UUID:           dbeb37be-3d49-4399-a915-be9488e70f2c
-Active:         yes
-Persistent:     yes
-Autostart:      yes
-Bridge:         virbr2
+machine=squid
+tofu destroy -target=libvirt_domain.vm_${machine} -target=libvirt_volume.vm_${machine}_disk -target=libvirt_cloudinit_disk.vm_${machine}_cloudinit -auto-approve
+tofu apply -target=libvirt_domain.vm_${machine} -auto-approve
 
-Exécutez sur votre machine hôte (laurent-MS-A2) les commandes en ciblant vnet5 :
-
-# 1. Forcer le flooding sur le bridge iDMZ
-sudo ip link set dev virbr2 type bridge ageing_time 0
-
-# 2. Configurer la nouvelle interface hôte de Suricata (vnet5)
-sudo ip link set dev vnet5 promisc on
-sudo bridge link set dev vnet5 flood on
-
-Contrôlez ensuite dans la VM suricata :
-sudo tcpdump -nni eth1 -c 5
+  

@@ -7,4 +7,6 @@ git branch -M main
 git remote add origin git@github.com:lynucs/lab-purdue-opentofu.git
 git push -u origin main
 
-
+git add .
+git commit -m "Ajout de suricata dans le réseau OT et ejbca dans le réseau IT"
+git push

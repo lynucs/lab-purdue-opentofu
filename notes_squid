@@ -1,0 +1,28 @@
+tofu destroy \
+  -target=libvirt_domain.squid \
+  -target=libvirt_cloudinit_disk.squid_cloudinit \
+  -target=libvirt_volume.squid_disk
+
+tofu apply \
+  -replace=libvirt_domain.squid \
+  -replace=libvirt_volume.squid_disk \
+  -replace=libvirt_cloudinit_disk.squid_cloudinit \
+  -auto-approve
+
+
+ssh -i ~/.ssh/id_ed25519 rocky@192.168.20.10 "ip -br a && ip route"
+lo               UNKNOWN        127.0.0.1/8 ::1/128 
+eth0             UP             192.168.20.10/24 fe80::5054:ff:fe26:7f63/64 
+default via 192.168.20.254 dev eth0 proto static metric 100 
+192.168.20.0/24 dev eth0 proto kernel scope link src 192.168.20.10 metric 100 
+
+ansible-playbook -i inventory.ini deploy_squid_ssl_selfcert_bump_wazuh.yaml 
+
+laurent@laurent-MS-A2:~/LAB/opentofu/ot$ ssh -i ~/.ssh/id_ed25519 rocky@192.168.20.10 'for p in 1514 1515; do timeout 2 bash -c "</dev/tcp/192.168.30.100/$p" && echo "Port $p : OK" || echo "Port $p : BLOQUÉ"; done'
+Port 1514 : BLOQUÉ
+Port 1515 : BLOQUÉ
+
+
+
+
+ansible-playbook -i inventory.ini wazuh_deploy_agent.yaml -e "target_hosts=squid wazuh_agent_group=ot-network"

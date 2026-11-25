@@ -9,6 +9,10 @@ resource "libvirt_volume" "wazuh_disk" {
 resource "libvirt_cloudinit_disk" "wazuh_cloudinit" {
   name      = "wazuh_cloudinit.iso"
   user_data = templatefile("${path.module}/cloud_init_wazuh.cfg", {})
+  meta_data = <<-EOF
+    instance-id: wazuh-manager-01
+    local-hostname: wazuh-manager
+  EOF
   pool      = "default"
 }
 

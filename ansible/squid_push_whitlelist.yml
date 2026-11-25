@@ -1,6 +1,6 @@
 ---
 - name: Configuration de Squid (proxy du lab)
-  hosts: squid01
+  hosts: squid
   become: true
 
   tasks:
