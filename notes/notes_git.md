@@ -13,3 +13,5 @@ git push
 
 
 git commit -m "Add wazuh manbager & squid vm"
+
+git add -A && git commit -m "repo clean" && git push

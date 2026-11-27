@@ -1,38 +1,33 @@
-ansible/
+# Access to the machine
+```bash
+$ ssh -i ~/.ssh/id_ed25519 rocky@192.168.30.50
+```
+
+# Check status
+```bash
+$ virsh domstate suricata
+running
+
+$ ssh -i ~/.ssh/id_ed25519 rocky@192.168.30.50 "hostname -f"
+suricata.ot.local
+
+$ ssh -i ~/.ssh/id_ed25519 rocky@192.168.30.50 "ip -br a"
+lo               UNKNOWN        127.0.0.1/8 ::1/128 
+eth0             UP             192.168.30.50/24 fe80::72d1:8405:ea3f:c2ed/64 
+eth1             UP             
+```
+
+# Ansible structure
+
 ├── inventory.ini
-├── deploy_purdue_rules.yml
-└── templates/
-    └── purdue_ot.rules.j2
-
-
-# port mirroring
-
-laurent@laurent-MS-A2:~$ virsh domiflist suricata
- Interface   Type      Source   Model    MAC
-------------------------------------------------------------
- vnet3       network   ot       virtio   52:54:00:f6:5a:e2
- vnet5       network   idmz     virtio   52:54:00:4a:a6:4a
-
-laurent@laurent-MS-A2:~$ virsh net-info idmz
-Name:           idmz
-UUID:           dbeb37be-3d49-4399-a915-be9488e70f2c
-Active:         yes
-Persistent:     yes
-Autostart:      yes
-Bridge:         virbr2
-
-Exécutez sur votre machine hôte (laurent-MS-A2) les commandes en ciblant vnet5 :
-
-# 1. Forcer le flooding sur le bridge iDMZ
-sudo ip link set dev virbr2 type bridge ageing_time 0
-
-# 2. Configurer la nouvelle interface hôte de Suricata (vnet5)
-sudo ip link set dev vnet5 promisc on
-sudo bridge link set dev vnet5 flood on
-
-Contrôlez ensuite dans la VM suricata :
-sudo tcpdump -nni eth1 -c 5
-
+├── suricata_configure_wazuh_alerts.yml
+├── suricata_deploy_emerging_threats_open_rules.yml
+├── suricata_deploy_specific_rules.yml
+├── suricata_deploy.yml
+├── templates
+│   ├── purdue_ot.rules.j2
+│   ├── tapif-promisc.service.j2
+│   └── wazuh_purdue_rules.xml
 
 ###
 Le moteur Suricata 7.0.17 tourne en mode IDS, avec 53 307 règles chargées, et l'interface de capture passive (`eth1` / `ens4`) a bien ses offloadings coupés et le flag `PROMISC` actif.
