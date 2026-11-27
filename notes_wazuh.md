@@ -2,6 +2,7 @@
 ssh -i ~/.ssh/id_ed25519 rocky@192.168.30.100
 
 
+ansible-playbook -i inventory.ini wazuh_deploy_agent.yaml -e "target_hosts=squid wazuh_agent_group=default"
 
 [rocky@wazuh-manager ~]$ grep -n -E "INDEXER_PASSWORD|DASHBOARD_PASSWORD|ADMIN_PASSWORD|password" /opt/wazuh-docker/single-node/docker-compose.yml 
 24:      - INDEXER_PASSWORD=SecretPassword

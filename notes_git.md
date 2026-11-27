@@ -10,3 +10,6 @@ git push -u origin main
 git add .
 git commit -m "Ajout de suricata dans le réseau OT et ejbca dans le réseau IT"
 git push
+
+
+git commit -m "Add wazuh manbager & squid vm"

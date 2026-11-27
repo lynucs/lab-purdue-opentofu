@@ -1,0 +1,85 @@
+---
+- name: Mettre à jour la configuration du reverse proxy Nginx
+  hosts: squid
+  become: true
+  gather_facts: false
+
+  vars:
+    nginx_template: "{{ playbook_dir }}/templates/reverse_proxy.conf.j2"
+    nginx_config: /etc/nginx/conf.d/reverse_proxy.conf
+
+  tasks:
+    - name: Vérifier que le template existe sur le contrôleur Ansible
+      ansible.builtin.stat:
+        path: "{{ nginx_template }}"
+      delegate_to: localhost
+      become: false
+      register: nginx_template_file
+
+    - name: Refuser le déploiement si le template est absent
+      ansible.builtin.assert:
+        that:
+          - nginx_template_file.stat.exists
+          - nginx_template_file.stat.isreg
+        fail_msg: >-
+          Le template {{ nginx_template }} est absent ou n'est pas
+          un fichier régulier sur le contrôleur Ansible.
+
+    - name: Vérifier que Nginx est installé sur la cible
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/nginx
+          - -v
+      register: nginx_version
+      changed_when: false
+
+    - name: Vérifier que le répertoire de configuration existe
+      ansible.builtin.stat:
+        path: /etc/nginx/conf.d
+      register: nginx_conf_directory
+
+    - name: Refuser le déploiement si le répertoire Nginx est absent
+      ansible.builtin.assert:
+        that:
+          - nginx_conf_directory.stat.exists
+          - nginx_conf_directory.stat.isdir
+        fail_msg: >-
+          Le répertoire /etc/nginx/conf.d n'existe pas sur la cible.
+
+    - name: Déployer la nouvelle configuration du reverse proxy
+      ansible.builtin.template:
+        src: "{{ nginx_template }}"
+        dest: "{{ nginx_config }}"
+        owner: root
+        group: root
+        mode: "0644"
+        backup: true
+      notify: Valider et recharger Nginx
+
+    - name: Exécuter immédiatement le handler Nginx
+      ansible.builtin.meta: flush_handlers
+
+    - name: Vérifier que Nginx est actif
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - is-active
+          - nginx
+      register: nginx_service_status
+      changed_when: false
+      failed_when: nginx_service_status.stdout != "active"
+
+  handlers:
+    - name: Valider la configuration Nginx
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/nginx
+          - -t
+      changed_when: false
+      listen: Valider et recharger Nginx
+
+    - name: Recharger le service Nginx
+      ansible.builtin.systemd:
+        name: nginx
+        state: reloaded
+      listen: Valider et recharger Nginx
