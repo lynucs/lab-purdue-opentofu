@@ -1,0 +1,222 @@
+---
+- name: Installation Squid SSL-Bump (auto-signé)
+  hosts: webrelay
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    #################################################################
+    # INSTALLATION
+    #################################################################
+
+    - name: Installer Squid et dépendances
+      ansible.builtin.package:
+        name: "{{ squid_packages }}"
+        state: present
+
+    - name: Vérifier présence SSL-Bump
+      ansible.builtin.command: squid -v
+      register: squid_ver
+      changed_when: false
+
+    - name: Vérifier support OpenSSL
+      ansible.builtin.assert:
+        that:
+          - squid_ver.stdout | lower is search('openssl')
+        fail_msg: "Le paquet Squid installé ne supporte pas SSL-Bump/OpenSSL."
+
+    #################################################################
+    # CERTIFICATS
+    #################################################################
+
+    - name: Créer dossier SSL
+      ansible.builtin.file:
+        path: "{{ squid_ssl_dir }}"
+        state: directory
+        owner: "{{ squid_user }}"
+        group: "{{ squid_group }}"
+        mode: "0700"
+
+    - name: Générer clé privée CA
+      ansible.builtin.command:
+        cmd: openssl genrsa -out {{ squid_ssl_dir }}/squid_ca.key 4096
+      args:
+        creates: "{{ squid_ssl_dir }}/squid_ca.key"
+
+    - name: Générer certificat CA
+      ansible.builtin.command: >
+        openssl req -new -x509
+        -days 1825
+        -key {{ squid_ssl_dir }}/squid_ca.key
+        -out {{ squid_ssl_dir }}/squid_ca.crt
+        -subj "/C=FR/O=Lab/CN=Squid Root CA"
+        -addext "basicConstraints=critical,CA:TRUE,pathlen:0"
+        -addext "keyUsage=critical,digitalSignature,keyCertSign,cRLSign"
+      args:
+        creates: "{{ squid_ssl_dir }}/squid_ca.crt"
+
+    - name: Construire le fichier PEM
+      ansible.builtin.shell: |
+        cat {{ squid_ssl_dir }}/squid_ca.key \
+            {{ squid_ssl_dir }}/squid_ca.crt \
+            > {{ squid_ssl_dir }}/squid_bump.pem
+      args:
+        creates: "{{ squid_ssl_dir }}/squid_bump.pem"
+
+    - name: Permissions clé privée
+      ansible.builtin.file:
+        path: "{{ item }}"
+        owner: "{{ squid_user }}"
+        group: "{{ squid_group }}"
+        mode: "0400"
+      loop:
+        - "{{ squid_ssl_dir }}/squid_ca.key"
+        - "{{ squid_ssl_dir }}/squid_bump.pem"
+
+    - name: Permissions certificat public
+      ansible.builtin.file:
+        path: "{{ squid_ssl_dir }}/squid_ca.crt"
+        owner: "{{ squid_user }}"
+        group: "{{ squid_group }}"
+        mode: "0444"
+
+    #################################################################
+    # SSL_DB
+    #################################################################
+
+    - name: Créer ssl_db
+      ansible.builtin.file:
+        path: "{{ squid_ssl_db_path }}"
+        state: directory
+        owner: "{{ squid_user }}"
+        group: "{{ squid_group }}"
+        mode: "0750"
+
+    - name: Vérifier ssl_db
+      ansible.builtin.stat:
+        path: "{{ squid_ssl_db_path }}/index.txt"
+      register: squid_ssl_db
+
+    - name: Nettoyer un dossier ssl_db vide ou incomplet avant initialisation
+      ansible.builtin.file:
+        path: "{{ squid_ssl_db_path }}"
+        state: absent
+      when: not squid_ssl_db.stat.exists
+
+    - name: Initialiser ssl_db
+      ansible.builtin.command: >
+        {{ squid_security_file_certgen_bin }}
+        -c
+        -s {{ squid_ssl_db_path }}
+        -M {{ squid_ssl_db_size_mb }}MB
+      when: not squid_ssl_db.stat.exists
+
+    - name: Corriger permissions ssl_db
+      ansible.builtin.file:
+        path: "{{ squid_ssl_db_path }}"
+        state: directory
+        recurse: true
+        owner: "{{ squid_user }}"
+        group: "{{ squid_group }}"
+        mode: "0750"
+        
+
+    #################################################################
+    # CONFIGURATION
+    #################################################################
+
+    - name: Copier whitelist
+      ansible.builtin.copy:
+        src: "{{ inventory_dir }}/files/squid/whitelist.txt"
+        dest: /etc/squid/whitelist.txt
+        owner: "{{ squid_user }}"
+        group: "{{ squid_group }}"
+        mode: "0644"
+      notify: Reload squid
+
+    - name: Déployer squid.conf
+      ansible.builtin.template:
+        src: "{{ inventory_dir }}/templates/squid.conf.j2"
+        dest: /etc/squid/squid.conf
+        owner: root
+        group: root
+        mode: "0644"
+        validate: "squid -k parse -f %s"
+      notify: Restart squid
+
+    #################################################################
+    # CACHE
+    #################################################################
+
+    - name: Vérifier cache Squid
+      ansible.builtin.stat:
+        path: /var/spool/squid/00
+      register: squid_cache
+
+    - name: Arrêter Squid avant initialisation cache
+      ansible.builtin.service:
+        name: squid
+        state: stopped
+      when: not squid_cache.stat.exists
+
+    - name: Initialiser cache
+      ansible.builtin.command: squid -z
+      become_user: "{{ squid_user }}"
+      when: not squid_cache.stat.exists
+
+    #################################################################
+    # SERVICE
+    #################################################################
+
+    - name: Activer et démarrer Squid
+      ansible.builtin.service:
+        name: squid
+        enabled: true
+        state: started
+
+    #################################################################
+    # WAZUH
+    #################################################################
+
+    - name: Vérifier présence ossec.conf
+      ansible.builtin.stat:
+        path: "{{ wazuh_ossec_conf }}"
+      register: wazuh_conf
+
+    - name: ACL lecture logs Squid pour Wazuh
+      ansible.posix.acl:
+        path: /var/log/squid
+        entity: "{{ wazuh_user }}"
+        etype: user
+        permissions: rx
+        state: present
+      when: wazuh_conf.stat.exists
+
+    - name: Configurer collecte Squid pour Wazuh
+      ansible.builtin.blockinfile:
+        path: "{{ wazuh_ossec_conf }}"
+        insertbefore: "</ossec_config>"
+        marker: "<!-- {mark} ANSIBLE MANAGED BLOCK : SQUID LOGS -->"
+        block: |
+          <localfile>
+            <log_format>squid</log_format>
+            <location>/var/log/squid/access.log</location>
+          </localfile>
+      when: wazuh_conf.stat.exists
+      notify: Restart wazuh-agent
+
+  handlers:
+
+    - name: Reload squid
+      ansible.builtin.command: squid -k reconfigure
+
+    - name: Restart squid
+      ansible.builtin.service:
+        name: squid
+        state: restarted
+
+    - name: Restart wazuh-agent
+      ansible.builtin.service:
+        name: wazuh-agent
+        state: restarted

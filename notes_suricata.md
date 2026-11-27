@@ -1,6 +1,6 @@
 ansible/
 ├── inventory.ini
-├── deploy_purdue_rules.yaml
+├── deploy_purdue_rules.yml
 └── templates/
     └── purdue_ot.rules.j2
 

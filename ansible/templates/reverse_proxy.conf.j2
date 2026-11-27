@@ -2,6 +2,11 @@ server {
     listen {{ waf_listen_ip }}:{{ nginx_https_port }} ssl;
     server_name _;
 
+{% for net in waf_allowed_nets %}
+    allow {{ net }};
+{% endfor %}
+    deny all;
+    
     ssl_certificate     /etc/nginx/nginx.crt;
     ssl_certificate_key /etc/nginx/nginx.key;
     ssl_protocols       TLSv1.2 TLSv1.3;

@@ -1,6 +1,6 @@
 ---
 - name: Configuration de Squid (proxy du lab)
-  hosts: squid
+  hosts: webrelay
   become: true
 
   tasks:

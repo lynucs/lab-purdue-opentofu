@@ -4,6 +4,7 @@
 *.tfstate
 *.tfstate.*
 *.tfstate.backup
+ansible/repositories
 
 # Fichiers de crash et logs
 crash.log

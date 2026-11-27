@@ -1,0 +1,32 @@
+---
+- name: Désactiver SELinux sur les machines Rocky Linux (IT, iDMZ, OT)
+  hosts: it_servers:idmz_servers:ot_servers
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Vérifier si l'outil setenforce est présent sur la cible
+      ansible.builtin.stat:
+        path: /usr/sbin/setenforce
+      register: selinux_bin
+      when: ansible_os_family == "RedHat"
+
+    - name: Passer SELinux en mode Permissive immédiatement (sans redémarrage)
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/setenforce
+          - "0"
+      when:
+        - ansible_os_family == "RedHat"
+        - selinux_bin.stat.exists
+        - ansible_selinux.status is defined
+        - ansible_selinux.status == "enabled"
+        - ansible_selinux.mode == "enforcing"
+
+    - name: Désactiver SELinux de manière persistante au prochain démarrage
+      ansible.posix.selinux:
+        state: disabled
+      when:
+        - ansible_os_family == "RedHat"
+        - ansible_selinux.status is defined
+        - ansible_selinux.status != "disabled"

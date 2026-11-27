@@ -1,7 +1,0 @@
-waf_listen_ip: "192.168.20.20"
-nginx_http_port: 8080
-nginx_https_port: 8443
-
-protected_backends:
-  - name: www01
-    url: http://192.168.30.10/

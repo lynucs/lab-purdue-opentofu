@@ -3,7 +3,8 @@ resource "libvirt_volume" "wazuh_disk" {
   name             = "wazuh_manager.qcow2"
   base_volume_name = "Rocky-9-GenericCloud.qcow2"
   pool             = "default"
-  size             = 42949672960 # 40 Go (taille en octets pour accueillir l'indexeur et les logs)
+  #size             = 53687091200 # 50 Go (taille en octets pour accueillir l'indexeur et les logs)
+  size             = 64424509440 # 60 Go (taille en octets pour accueillir l'indexeur et les logs)
 }
 
 resource "libvirt_cloudinit_disk" "wazuh_cloudinit" {

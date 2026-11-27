@@ -1,0 +1,35 @@
+---
+- name: Vérifier les prérequis d'inventaire pour webrelay
+  hosts: webrelay
+  gather_facts: false
+  tasks:
+    - name: Confirmer la résolution des variables dans host_vars/webrelay.yml
+      ansible.builtin.assert:
+        that:
+          - waf_listen_ip is defined
+          - nginx_https_port is defined
+          - waf_allowed_nets is defined
+          - squid_port is defined
+          - squid_allowed_nets is defined
+          - crs_version is defined
+        fail_msg: >-
+          Variables manquantes pour webrelay. Vérifiez la présence et le contenu
+          de host_vars/webrelay.yml.
+
+- name: 1. Déployer et enregistrer l'agent Wazuh sur webrelay
+  ansible.builtin.import_playbook: wazuh_deploy_agent.yml
+  vars:
+    target_hosts: webrelay
+  tags:
+    - wazuh
+
+- name: 2. Déployer le proxy Squid SSL-Bump sur webrelay
+  ansible.builtin.import_playbook: squid_deploy_selfsignedcert.yml
+  tags:
+    - squid
+
+- name: 4. Déployer le Reverse Proxy WAF Nginx + ModSecurity sur webrelay
+  ansible.builtin.import_playbook: nginx-rp_deploy.yml
+  tags:
+    - nginx
+    - waf

@@ -1,73 +1,97 @@
 ---
-- name: Mettre à jour la configuration du reverse proxy Nginx
-  hosts: squid
+- name: Mettre à jour la configuration Nginx Reverse Proxy et ModSecurity
+  hosts: webrelay
   become: true
   gather_facts: false
 
   vars:
-    nginx_template: "{{ playbook_dir }}/templates/reverse_proxy.conf.j2"
+    nginx_template: "{{ inventory_dir }}/templates/reverse_proxy.conf.j2"
     nginx_config: /etc/nginx/conf.d/reverse_proxy.conf
+    modsec_files:
+      - src: "{{ inventory_dir }}/files/modsec/modsecurity.conf"
+        dest: /etc/nginx/modsec/modsecurity.conf
+      - src: "{{ inventory_dir }}/files/modsec/unicode.mapping"
+        dest: /etc/nginx/modsec/unicode.mapping
 
   tasks:
-    - name: Vérifier que le template existe sur le contrôleur Ansible
+    - name: Vérifier que le template Nginx existe sur le contrôleur
       ansible.builtin.stat:
         path: "{{ nginx_template }}"
       delegate_to: localhost
       become: false
       register: nginx_template_file
 
-    - name: Refuser le déploiement si le template est absent
+    - name: Vérifier que les fichiers ModSecurity existent sur le contrôleur
+      ansible.builtin.stat:
+        path: "{{ item.src }}"
+      delegate_to: localhost
+      become: false
+      loop: "{{ modsec_files }}"
+      register: modsec_source_files
+
+    - name: Refuser le déploiement si un fichier source est absent
       ansible.builtin.assert:
         that:
           - nginx_template_file.stat.exists
-          - nginx_template_file.stat.isreg
-        fail_msg: >-
-          Le template {{ nginx_template }} est absent ou n'est pas
-          un fichier régulier sur le contrôleur Ansible.
+          - modsec_source_files.results | map(attribute='stat.exists') is all
+        fail_msg: "Le template Nginx ou un fichier dans files/modsec/ est absent sur le contrôleur."
 
-    - name: Vérifier que Nginx est installé sur la cible
-      ansible.builtin.command:
-        argv:
-          - /usr/sbin/nginx
-          - -v
-      register: nginx_version
-      changed_when: false
-
-    - name: Vérifier que le répertoire de configuration existe
-      ansible.builtin.stat:
-        path: /etc/nginx/conf.d
-      register: nginx_conf_directory
-
-    - name: Refuser le déploiement si le répertoire Nginx est absent
-      ansible.builtin.assert:
-        that:
-          - nginx_conf_directory.stat.exists
-          - nginx_conf_directory.stat.isdir
-        fail_msg: >-
-          Le répertoire /etc/nginx/conf.d n'existe pas sur la cible.
-
-    - name: Déployer la nouvelle configuration du reverse proxy
+    - name: Vérifier si reverse_proxy.conf diffère de la cible
       ansible.builtin.template:
         src: "{{ nginx_template }}"
         dest: "{{ nginx_config }}"
         owner: root
         group: root
         mode: "0644"
-        backup: true
+      check_mode: true
+      register: nginx_config_diff
+
+    - name: Vérifier si les fichiers ModSecurity diffèrent de la cible
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop: "{{ modsec_files }}"
+      check_mode: true
+      register: modsec_files_diff
+
+    - name: Stopper l'exécution si aucune modification n'est requise
+      ansible.builtin.meta: end_host
+      when:
+        - not nginx_config_diff.changed
+        - not modsec_files_diff.changed
+
+    - name: Appliquer reverse_proxy.conf
+      ansible.builtin.template:
+        src: "{{ nginx_template }}"
+        dest: "{{ nginx_config }}"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Valider et recharger Nginx
+
+    - name: Appliquer les fichiers ModSecurity
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop: "{{ modsec_files }}"
       notify: Valider et recharger Nginx
 
     - name: Exécuter immédiatement le handler Nginx
       ansible.builtin.meta: flush_handlers
 
     - name: Vérifier que Nginx est actif
-      ansible.builtin.command:
-        argv:
-          - systemctl
-          - is-active
-          - nginx
+      ansible.builtin.systemd:
+        name: nginx
+        state: started
+      check_mode: true
       register: nginx_service_status
-      changed_when: false
-      failed_when: nginx_service_status.stdout != "active"
+      failed_when: nginx_service_status.changed
 
   handlers:
     - name: Valider la configuration Nginx
